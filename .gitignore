@@ -6,40 +6,24 @@ out/
 *.exe
 *.dmg
 
-# Node.js
+# Dependencies & caches
 node_modules/
+.eslintcache
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Python
-backend/venv/
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-.env
-.venv
-
-# PyInstaller
-*.manifest
-*.spec.bak
-build/pyinstaller-work/
-
 # Logs
 logs/
 *.log
 
-# Editor directories and files
+# Editor & OS files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS generated files
 .DS_Store
 .DS_Store?
 ._*
@@ -47,12 +31,3 @@ logs/
 .Trashes
 ehthumbs.db
 Thumbs.db
-
-# Electron
-electron-builder.yml
-
-# Don't ignore these important files
-!backend/engine.spec
-!backend/config.json
-!scripts/after-pack.js
-!scripts/build-engine.sh

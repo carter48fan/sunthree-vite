@@ -1,34 +1,31 @@
-# sunthree-vite
+# Sunthree Vite
 
-An Electron application with React and TypeScript
+High-performance Electron companion app for Suunto bone conduction sports headphones and offline MP3 players.
 
-## Recommended IDE Setup
+## Features
 
-- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
+- **Zero-Python Native Engine**: Directly leverages standalone `yt-dlp` and `ffmpeg` via native Electron IPC.
+- **Automatic Device & Volume Detection**: Auto-detects mounted USB devices on Windows and Linux that have an active `MUSIC` folder, with instant hotplug detection.
+- **Device Identification**: Recognizes Suunto Wing (with signature red safety LED graphics), Suunto Sonic, and Suunto Sports Watches.
+- **Fast Audio Extraction**: High-fidelity 192kbps MP3 audio conversion directly to device storage.
+- **One-Click Experience**: Smart clipboard detection, live stream progress, and auto-folder creation.
 
-## Project Setup
-
-### Install
+## Development
 
 ```bash
-$ pnpm install
+# Install dependencies
+pnpm install
+
+# Run in development mode
+pnpm dev
 ```
 
-### Development
+## Production Builds
 
 ```bash
-$ pnpm dev
-```
+# Build for Windows (NSIS .exe)
+pnpm build:win
 
-### Build
-
-```bash
-# For windows
-$ pnpm build:win
-
-# For macOS
-$ pnpm build:mac
-
-# For Linux
-$ pnpm build:linux
+# Build for Linux (AppImage)
+pnpm build:linux
 ```

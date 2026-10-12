@@ -5,13 +5,12 @@
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",
-   "scripts": {
+  "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "pnpm run typecheck:node && pnpm run typecheck:web",
-    "prebuild": "bash ./scripts/build-engine.sh",
     "release": "pnpm build:linux && pnpm build:win",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
@@ -56,23 +55,5 @@
       "electron",
       "esbuild"
     ]
-  },
-  "build": {
-    "appId": "com.carter.sunthree.vite",
-    "productName": "Sunthree Vite",
-    "asar": true,
-    "extraFiles": [
-      {
-        "from": "build/engine",
-        "to": "resources/engine",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "linux": {
-      "target": "AppImage"
-    },
-    "afterPack": "./scripts/after-pack.js"
   }
 }

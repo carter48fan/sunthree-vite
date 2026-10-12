@@ -1,10 +1,19 @@
-# electron-builder.yml (CLEAN AND FOCUSED)
-appId: com.electron.app
-productName: sunthree-vite
+appId: com.carter.sunthree.vite
+productName: Sunthree Vite
 directories:
   output: dist
-extraResources:
-  - from: build/engine
-    to: engine
+asar: true
+afterPack: ./scripts/after-pack.js
+
 linux:
   target: AppImage
+  category: Audio
+  extraResources:
+    - from: resources/bin/linux
+      to: bin
+
+win:
+  target: nsis
+  extraResources:
+    - from: resources/bin/win
+      to: bin

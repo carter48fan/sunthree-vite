@@ -19,7 +19,8 @@ export default defineConfig({
     server: {
       headers: {
         // More permissive CSP for development
-        "Content-Security-Policy": "script-src 'self' 'unsafe-eval' 'unsafe-inline'; object-src 'none';"
+        'Content-Security-Policy':
+          "script-src 'self' 'unsafe-eval' 'unsafe-inline'; object-src 'none';"
       }
     }
   }

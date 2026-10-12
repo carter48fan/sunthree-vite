@@ -1,229 +1,354 @@
-import React, { useState, useEffect } from 'react';
-import { ElectronAPI } from '@electron-toolkit/preload';
+import type { JSX } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { DetectedDevice, DownloadProgress } from '../../preload'
+import { DeviceGraphic } from './components/DeviceGraphic'
 
-declare global {
-  interface Window {
-    electron: ElectronAPI
-    electronAPI: {
-      sendCommand: (command: string, payload?: any) => void;
-      onEngineResponse: (callback: (response: any) => void) => void;
-      onEngineReady: (callback: () => void) => void; // Added here
-    }
-  }
-}
+export default function App(): JSX.Element {
+  const [url, setUrl] = useState('')
+  const [devices, setDevices] = useState<DetectedDevice[]>([])
+  const [selectedDevice, setSelectedDevice] = useState<DetectedDevice | null>(null)
+  const [downloadsDir, setDownloadsDir] = useState<string>('')
+  const [useDownloadsFallback, setUseDownloadsFallback] = useState(false)
 
-type EngineResponse =
-  | { type: 'device-found'; path: string }
-  | { type: 'device-not-found' }
-  | { type: 'drives-list'; drives: { name: string; path: string }[] }
-  | { type: 'download-complete'; file: string }
-  | { type: 'download-progress'; progress: { status: string; percent: number; speed: string; eta: string } }
-  | { type: 'error'; message: string };
+  const [isDownloading, setIsDownloading] = useState(false)
+  const [progress, setProgress] = useState<DownloadProgress | null>(null)
+  const [statusMessage, setStatusMessage] = useState<string>('Searching for devices...')
+  const [completedFile, setCompletedFile] = useState<string | null>(null)
+  const [isDarkMode, setIsDarkMode] = useState(true)
 
-function App() {
-  const [url, setUrl] = useState('');
-  const [devicePath, setDevicePath] = useState('');
-  const [drives, setDrives] = useState<{name: string, path: string}[]>([]);
-  const [message, setMessage] = useState('Initializing engine...');
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [progress, setProgress] = useState<{status: string, percent: number, speed: string, eta: string} | null>(null);
-  const [isDarkMode, setIsDarkMode] = useState(false);
-
-  // Poll progress when downloading
-  useEffect(() => {
-    let interval: any;
-    if (isDownloading) {
-      interval = setInterval(() => {
-        window.electronAPI.sendCommand('download-progress');
-      }, 500);
-    } else {
-      setProgress(null);
-    }
-    return () => clearInterval(interval);
-  }, [isDownloading]);
-
+  // Synchronize dark mode class
   useEffect(() => {
     if (isDarkMode) {
-      document.documentElement.classList.add('dark');
+      document.documentElement.classList.add('dark')
     } else {
-      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.remove('dark')
     }
-  }, [isDarkMode]);
+  }, [isDarkMode])
 
+  // Load downloads directory
   useEffect(() => {
-    // This is our radio room.
-    window.electronAPI.onEngineResponse((response: EngineResponse) => {
-      console.log('Response from engine:', response);
-
-      switch (response.type) {
-        case 'device-found':
-          const musicPath = response.path.endsWith('/') ? `${response.path}Music/` : `${response.path}/Music/`;
-          setDevicePath(musicPath);
-          setMessage(`Device found! Path set to: ${musicPath}`);
-          break;
-        case 'device-not-found':
-          setMessage(`Device not found. Will download to local folder.`);
-          break;
-        case 'drives-list':
-          const currentDrives = response.drives || [];
-          setDrives(currentDrives);
-          if (currentDrives.length > 0) {
-            setMessage(`Found ${currentDrives.length} removable drive(s).`);
-            const firstDrive = currentDrives[0];
-            const musicPath = firstDrive.path.endsWith('/') || firstDrive.path.endsWith('\\') ? `${firstDrive.path}MUSIC/` : `${firstDrive.path}/MUSIC/`;
-            setDevicePath(musicPath);
-          } else {
-            setMessage('No external drives found. Using Downloads folder.');
-            setDevicePath('downloads');
-          }
-          break;
-        case 'download-complete':
-          setIsDownloading(false);
-          setMessage(`SUCCESS! File saved to: ${response.file}`);
-          break;
-        case 'download-progress':
-          setProgress(response.progress);
-          break;
-        case 'error':
-          setIsDownloading(false);
-          setMessage(`ENGINE ERROR: ${response.message}`);
-          break;
-      }
-    });
-
-    // --- NEW LOGIC: LISTEN FOR THE ENGINE TO BE READY ---
-    // We set up the listener for the one-time ready signal.
-    window.electronAPI.onEngineReady(() => {
-      console.log("React received the 'engine-ready' signal!");
-      setMessage('Engine ready. Searching for devices...');
-      window.electronAPI.sendCommand('list-drives');
-    });
-
-    // Also try immediately just in case engine was already ready
-    window.electronAPI.sendCommand('list-drives');
-
-  }, []); // Empty array ensures this runs only once on mount.
-
-  const handleDownload = () => {
-    if (!devicePath) {
-      setMessage('Please select a download location first.');
-      return;
+    if (window.electronAPI?.getDownloadsDir) {
+      window.electronAPI.getDownloadsDir().then((dir) => setDownloadsDir(dir))
     }
-    setIsDownloading(true);
-    setMessage(`Command sent. Waiting for completion...`);
-    window.electronAPI.sendCommand('download-video', { url, path: devicePath });
-  };
+  }, [])
 
-  const refreshDrives = () => {
-    setMessage('Refreshing drive list...');
-    window.electronAPI.sendCommand('list-drives');
-  };
+  // Update selected device from list
+  const applyDevices = useCallback((deviceList: DetectedDevice[]) => {
+    setDevices(deviceList)
+
+    if (deviceList.length > 0) {
+      // Pick first device (they are already sorted by priority: MUSIC folder & Wayne's device first)
+      const primary = deviceList[0]
+      setSelectedDevice(primary)
+      setUseDownloadsFallback(false)
+
+      if (primary.hasMusicFolder) {
+        setStatusMessage(`Matched ${primary.name} with active MUSIC folder!`)
+      } else {
+        setStatusMessage(`Connected: ${primary.name}. MUSIC folder will be created on transfer.`)
+      }
+    } else {
+      setSelectedDevice(null)
+      setStatusMessage('No external music devices detected. Ready for Downloads folder.')
+    }
+  }, [])
+
+  // Initialize devices & listeners
+  useEffect(() => {
+    if (!window.electronAPI) return
+
+    // 1. Initial devices fetch
+    window.electronAPI.getDevices().then(applyDevices)
+
+    // 2. Hotplug event listener
+    const unsubDevices = window.electronAPI.onDevicesUpdated((updatedList) => {
+      applyDevices(updatedList)
+    })
+
+    // 3. Download progress listener
+    const unsubProgress = window.electronAPI.onDownloadProgress((prog) => {
+      setProgress(prog)
+      if (prog.status === 'downloading') {
+        setStatusMessage(`Downloading audio (${Math.round(prog.percent)}%)...`)
+      } else if (prog.status === 'converting') {
+        setStatusMessage('Converting audio to 192kbps MP3...')
+      } else if (prog.status === 'completed') {
+        setIsDownloading(false)
+        setCompletedFile(prog.file || 'Audio Track')
+        setStatusMessage('Track successfully transferred!')
+      } else if (prog.status === 'error') {
+        setIsDownloading(false)
+        setStatusMessage(`Error: ${prog.message || 'Download failed'}`)
+      }
+    })
+
+    return () => {
+      unsubDevices?.()
+      unsubProgress?.()
+    }
+  }, [applyDevices])
+
+  // Auto-detect clipboard URL when window gets focus
+  const checkClipboard = async (): Promise<void> => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text && (text.includes('youtube.com/watch') || text.includes('youtu.be/'))) {
+        setUrl(text.trim())
+        setStatusMessage('YouTube link pasted from clipboard!')
+      }
+    } catch {
+      // Clipboard permissions may fail if not focused
+    }
+  }
+
+  const handleDownload = async (): Promise<void> => {
+    if (!url.trim()) {
+      setStatusMessage('Please enter or paste a YouTube URL.')
+      return
+    }
+
+    const targetPath = useDownloadsFallback
+      ? downloadsDir
+      : selectedDevice?.musicPath || downloadsDir
+
+    if (!targetPath) {
+      setStatusMessage('Please choose a valid destination folder.')
+      return
+    }
+
+    setIsDownloading(true)
+    setCompletedFile(null)
+    setProgress({ status: 'starting', percent: 0 })
+    setStatusMessage('Initiating download engine...')
+
+    try {
+      const result = await window.electronAPI.startDownload(url.trim(), targetPath)
+      if (!result.success) {
+        setIsDownloading(false)
+        setStatusMessage(`Download failed: ${result.error || 'Unknown error'}`)
+      }
+    } catch (err: unknown) {
+      setIsDownloading(false)
+      setStatusMessage(`Error: ${(err as Error).message || 'Execution failed'}`)
+    }
+  }
+
+  const currentDestination = useDownloadsFallback
+    ? downloadsDir
+    : selectedDevice?.musicPath || downloadsDir
 
   return (
-    <div className="flex items-center justify-center min-h-screen">
-      <div
-        className="relative w-full max-w-md p-8 space-y-6 bg-white/90 dark:bg-black/50 rounded-2xl shadow-lg backdrop-blur-lg border border-red-500/20 transition-colors duration-300"
-      >
-        <button
-          onClick={() => setIsDarkMode(!isDarkMode)}
-          className="absolute top-4 right-4 p-2 text-red-500 hover:bg-red-100 dark:hover:bg-white/10 rounded-full transition-colors"
-          title="Toggle Dark Mode"
-        >
-          {isDarkMode ? '☀️' : '🌙'}
-        </button>
-        <div className="text-center">
-          <h1 className="text-4xl font-bold text-red-500 tracking-wider">SUUNTHREE</h1>
-          <p className="text-red-700 dark:text-red-400/70 mt-2"><b>Status:</b> {message}</p>
+    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-950 text-slate-100 selection:bg-red-500 selection:text-white">
+      <div className="w-full max-w-xl bg-slate-900/90 border border-slate-800 rounded-3xl shadow-2xl backdrop-blur-xl p-8 relative overflow-hidden transition-all duration-300">
+        {/* Top Accent Light */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-3/4 h-1 bg-gradient-to-r from-transparent via-red-500 to-transparent" />
+
+        {/* Header Controls */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-red-600 to-red-500 flex items-center justify-center shadow-lg shadow-red-500/20">
+              <span className="text-white font-black text-xl">S</span>
+            </div>
+            <div>
+              <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                SUNTHREE
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 uppercase tracking-widest">
+                  v2.0 Native
+                </span>
+              </h1>
+              <p className="text-xs text-slate-400">Suunto Companion for Wayne</p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setIsDarkMode(!isDarkMode)}
+            className="p-2.5 rounded-xl bg-slate-800/60 hover:bg-slate-700/60 text-slate-300 hover:text-white border border-slate-700/50 transition-colors"
+            title="Toggle theme"
+          >
+            {isDarkMode ? '☀️' : '🌙'}
+          </button>
         </div>
 
+        {/* Device Graphic Card */}
+        <div className="mb-6 rounded-2xl bg-gradient-to-b from-slate-800/40 to-slate-950/60 border border-slate-800/80 p-5 relative overflow-hidden">
+          {selectedDevice && !useDownloadsFallback ? (
+            <div className="flex flex-col items-center">
+              <div className="absolute top-3 right-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>DEVICE CONNECTED</span>
+              </div>
+
+              {/* Suunto Device Render */}
+              <DeviceGraphic
+                model={selectedDevice.model}
+                modelName={selectedDevice.modelName}
+                connected={true}
+                isWayne={selectedDevice.isWayneDevice}
+              />
+
+              {/* Device metadata badges */}
+              <div className="mt-2 flex flex-wrap items-center justify-center gap-2 text-xs">
+                <span className="px-3 py-1 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700/50 flex items-center gap-1">
+                  📁 <span className="font-mono">{selectedDevice.musicPath}</span>
+                </span>
+                {selectedDevice.hasMusicFolder ? (
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                    🎵 /MUSIC active
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+                    ⚡ Will create /MUSIC
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="py-6 flex flex-col items-center justify-center text-center">
+              <div className="w-16 h-16 rounded-2xl bg-slate-800/50 border border-slate-700/50 flex items-center justify-center mb-3">
+                <span className="text-3xl animate-bounce">🎧</span>
+              </div>
+              <h3 className="font-semibold text-slate-200 text-sm">
+                Waiting for Suunto Headphones...
+              </h3>
+              <p className="text-xs text-slate-400 max-w-xs mt-1">
+                Plug Wayne&apos;s headphones in via USB. The app will lock onto the device and its{' '}
+                <code className="text-red-400 font-mono">MUSIC</code> folder automatically.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Input & Target Controls */}
         <div className="space-y-4">
-          <div className="relative w-full">
+          {/* YouTube Link Input */}
+          <div className="relative">
             <input
-              className="w-full px-4 py-3 pr-12 bg-red-50 dark:bg-red-900/20 border border-red-500/30 rounded-lg text-gray-900 dark:text-white placeholder-red-500/50 dark:placeholder-red-400/50 focus:outline-none focus:ring-2 focus:ring-red-500/50 transition-colors"
               type="text"
               value={url}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUrl(e.target.value)}
-              placeholder="Enter YouTube URL here"
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="Paste YouTube track URL here..."
+              disabled={isDownloading}
+              className="w-full px-4 py-3.5 pr-24 rounded-xl bg-slate-800/50 border border-slate-700/60 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-red-500/50 focus:border-red-500 text-sm font-medium transition-all"
             />
             <button
-              onClick={async () => {
-                try {
-                  const text = await navigator.clipboard.readText();
-                  setUrl(text);
-                } catch (err) {
-                  console.error('Failed to read clipboard contents: ', err);
-                }
-              }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-red-500 hover:text-red-700 dark:hover:text-red-400 transition-colors"
+              onClick={checkClipboard}
+              disabled={isDownloading}
+              type="button"
+              className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-slate-200 text-xs font-semibold flex items-center gap-1.5 border border-slate-600/40 transition-colors"
               title="Paste from clipboard"
             >
-              📋
+              <span>📋</span> Paste
             </button>
           </div>
 
+          {/* Storage Destination Selector */}
           <div className="flex gap-2">
             <select
-              className="flex-1 min-w-0 px-4 py-3 bg-red-50 dark:bg-red-900/20 border border-red-500/30 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500/50 appearance-none cursor-pointer truncate transition-colors"
-              value={devicePath}
-              onChange={(e) => setDevicePath(e.target.value)}
+              value={useDownloadsFallback ? 'downloads' : selectedDevice?.id || 'downloads'}
+              onChange={(e) => {
+                const val = e.target.value
+                if (val === 'downloads') {
+                  setUseDownloadsFallback(true)
+                } else {
+                  setUseDownloadsFallback(false)
+                  const matched = devices.find((d) => d.id === val)
+                  if (matched) setSelectedDevice(matched)
+                }
+              }}
+              disabled={isDownloading}
+              className="flex-1 px-4 py-3 rounded-xl bg-slate-800/50 border border-slate-700/60 text-slate-200 focus:outline-none focus:ring-2 focus:ring-red-500/50 text-sm font-medium cursor-pointer transition-all"
             >
-              <option value="" disabled className="bg-white dark:bg-gray-900 text-gray-500">Please select download location</option>
-              <option className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white" value="downloads">Local Downloads Folder</option>
-              {drives.map((d, i) => {
-                const musicPath = d.path.endsWith('/') || d.path.endsWith('\\') ? `${d.path}MUSIC/` : `${d.path}/MUSIC/`;
-                return (
-                  <option key={i} className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white" value={musicPath}>
-                    {d.name} ({musicPath})
-                  </option>
-                );
-              })}
+              {devices.map((d) => (
+                <option key={d.id} value={d.id} className="bg-slate-900 text-white">
+                  {d.name} {d.hasMusicFolder ? '• (🎵 /MUSIC detected)' : ''}
+                </option>
+              ))}
+              <option value="downloads" className="bg-slate-900 text-white">
+                💻 Local Downloads Folder ({downloadsDir || 'Downloads/MUSIC'})
+              </option>
             </select>
-            <button 
-              onClick={refreshDrives}
-              className="flex-shrink-0 px-4 bg-red-100 dark:bg-red-900/40 border border-red-500/30 rounded-lg text-red-600 dark:text-red-500 hover:bg-red-200 dark:hover:bg-red-900/60 transition-colors"
-              title="Refresh Drives"
+
+            <button
+              onClick={() => window.electronAPI?.getDevices().then(applyDevices)}
+              disabled={isDownloading}
+              className="px-4 rounded-xl bg-slate-800/50 hover:bg-slate-700/50 border border-slate-700/60 text-slate-300 hover:text-white transition-colors"
+              title="Refresh mounted drives"
             >
               🔄
             </button>
           </div>
         </div>
 
-        {isDownloading && progress && progress.status !== 'idle' && (
-          <div className="w-full mt-4 space-y-2">
-            <div className="flex justify-between text-sm font-bold text-red-900 dark:text-red-200">
-              <span>{progress.status === 'starting' ? 'Preparing format...' : progress.status === 'downloading' ? 'Downloading...' : 'Converting to MP3...'}</span>
-              <span>{Math.round(progress.percent)}%</span>
+        {/* Live Progress Bar */}
+        {isDownloading && progress && (
+          <div className="mt-5 space-y-2 p-4 rounded-xl bg-slate-800/40 border border-slate-800">
+            <div className="flex justify-between text-xs font-bold text-slate-300">
+              <span className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                {progress.status === 'starting'
+                  ? 'Fetching stream details...'
+                  : progress.status === 'downloading'
+                    ? 'Downloading audio...'
+                    : 'Converting to MP3 (192K)...'}
+              </span>
+              <span className="font-mono text-red-400">{Math.round(progress.percent)}%</span>
             </div>
-            <div className="w-full bg-red-200 rounded-full h-4 dark:bg-red-900/30 overflow-hidden shadow-inner">
-               <div 
-                 className="bg-red-500 h-4 rounded-full transition-all duration-300 ease-out" 
-                 style={{ width: `${progress.percent}%` }}
-               ></div>
+
+            <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden shadow-inner">
+              <div
+                className="bg-gradient-to-r from-red-600 to-red-500 h-3 rounded-full transition-all duration-300 ease-out"
+                style={{ width: `${Math.max(progress.percent, 5)}%` }}
+              />
             </div>
+
             {progress.status === 'downloading' && (
-              <div className="flex justify-between text-xs font-semibold text-red-700 dark:text-red-400">
+              <div className="flex justify-between text-[11px] text-slate-400 font-mono">
                 <span>Speed: {progress.speed || 'Calculating...'}</span>
-                <span>Time left: {progress.eta || 'Calculating...'}</span>
+                <span>ETA: {progress.eta || 'Calculating...'}</span>
               </div>
-            )}
-            {progress.status === 'processing' && (
-               <div className="text-center text-xs font-semibold text-red-700 dark:text-red-400 mt-1">
-                 Finalizing file. This might take a moment...
-               </div>
             )}
           </div>
         )}
 
+        {/* Completed notification with Open Folder */}
+        {completedFile && !isDownloading && (
+          <div className="mt-5 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-xl">✅</span>
+              <div>
+                <p className="text-xs font-semibold text-emerald-400">Download Complete!</p>
+                <p className="text-[11px] text-slate-400 truncate max-w-xs">{completedFile}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => window.electronAPI?.openPath(currentDestination)}
+              className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-xs font-medium border border-emerald-500/30 transition-colors"
+            >
+              Open Folder
+            </button>
+          </div>
+        )}
+
+        {/* Action Button */}
         <button
           onClick={handleDownload}
-          disabled={isDownloading || !devicePath}
-          className="w-full py-3 text-lg font-semibold text-white bg-red-600 dark:bg-red-600/80 rounded-lg hover:bg-red-700 dark:hover:bg-red-700/90 disabled:bg-gray-400 dark:disabled:bg-gray-600/50 disabled:cursor-not-allowed transition-all duration-300 ease-in-out focus:outline-none focus:ring-4 focus:ring-red-500/50"
+          disabled={isDownloading || !url.trim()}
+          className="mt-6 w-full py-4 text-sm font-bold tracking-wider text-white bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 active:scale-[0.99] rounded-xl shadow-lg shadow-red-600/25 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
         >
-          {isDownloading ? 'WORKING...' : 'DOWNLOAD'}
+          {isDownloading
+            ? 'TRANSFERRING TRACK...'
+            : selectedDevice && !useDownloadsFallback
+              ? `TRANSFER TO ${selectedDevice.modelName.toUpperCase()}`
+              : 'DOWNLOAD TO FOLDER'}
         </button>
+
+        {/* Status Bar */}
+        <div className="mt-4 text-center">
+          <p className="text-xs text-slate-400 font-medium">
+            <b className="text-slate-300">Status:</b> {statusMessage}
+          </p>
+        </div>
       </div>
     </div>
-  );
+  )
 }
-
-export default App;
