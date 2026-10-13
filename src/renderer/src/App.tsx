@@ -9,6 +9,14 @@ export default function App(): JSX.Element {
   const [selectedDevice, setSelectedDevice] = useState<DetectedDevice | null>(null)
   const [downloadsDir, setDownloadsDir] = useState<string>('')
   const [useDownloadsFallback, setUseDownloadsFallback] = useState(false)
+  const [delistedIds, setDelistedIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('sunthree_delisted_devices')
+      return saved ? JSON.parse(saved) : []
+    } catch {
+      return []
+    }
+  })
 
   const [isDownloading, setIsDownloading] = useState(false)
   const [progress, setProgress] = useState<DownloadProgress | null>(null)
@@ -32,26 +40,79 @@ export default function App(): JSX.Element {
     }
   }, [])
 
+  // Filter devices excluding any that were manually delisted
+  const activeDevices = devices.filter(
+    (d) => !delistedIds.includes(d.id) && !delistedIds.includes(d.mountPoint)
+  )
+
   // Update selected device from list
-  const applyDevices = useCallback((deviceList: DetectedDevice[]) => {
-    setDevices(deviceList)
+  const applyDevices = useCallback(
+    (deviceList: DetectedDevice[]) => {
+      setDevices(deviceList)
 
-    if (deviceList.length > 0) {
-      // Pick first device (they are already sorted by priority: MUSIC folder & Wayne's device first)
-      const primary = deviceList[0]
-      setSelectedDevice(primary)
-      setUseDownloadsFallback(false)
+      const activeList = deviceList.filter(
+        (d) => !delistedIds.includes(d.id) && !delistedIds.includes(d.mountPoint)
+      )
 
-      if (primary.hasMusicFolder) {
-        setStatusMessage(`Matched ${primary.name} with active MUSIC folder!`)
+      if (activeList.length > 0) {
+        // Pick first device (they are already sorted by priority: Wayne's device & Suunto first)
+        const primary = activeList[0]
+        setSelectedDevice(primary)
+        setUseDownloadsFallback(false)
+
+        if (primary.hasMusicFolder) {
+          setStatusMessage(`Matched ${primary.name} with active MUSIC folder!`)
+        } else {
+          setStatusMessage(`Connected: ${primary.name}. MUSIC folder will be created on transfer.`)
+        }
       } else {
-        setStatusMessage(`Connected: ${primary.name}. MUSIC folder will be created on transfer.`)
+        setSelectedDevice(null)
+        setStatusMessage('No external music devices detected. Ready for Downloads folder.')
       }
+    },
+    [delistedIds]
+  )
+
+  const handleDelistCurrentDevice = (): void => {
+    if (!selectedDevice) return
+    const idToDelist = selectedDevice.id
+    const mountToDelist = selectedDevice.mountPoint
+    const updated = Array.from(new Set([...delistedIds, idToDelist, mountToDelist]))
+    setDelistedIds(updated)
+    try {
+      localStorage.setItem('sunthree_delisted_devices', JSON.stringify(updated))
+    } catch {
+      // Ignore storage errors
+    }
+
+    const remaining = devices.filter(
+      (d) => !updated.includes(d.id) && !updated.includes(d.mountPoint)
+    )
+    if (remaining.length > 0) {
+      setSelectedDevice(remaining[0])
     } else {
       setSelectedDevice(null)
-      setStatusMessage('No external music devices detected. Ready for Downloads folder.')
+      setUseDownloadsFallback(true)
     }
-  }, [])
+    setStatusMessage(`Delisted "${selectedDevice.name}". It will be ignored in future scans.`)
+  }
+
+  const handleRestoreDelisted = (): void => {
+    setDelistedIds([])
+    try {
+      localStorage.removeItem('sunthree_delisted_devices')
+    } catch {
+      // Ignore
+    }
+    const primary = devices[0]
+    if (primary) {
+      setSelectedDevice(primary)
+      setUseDownloadsFallback(false)
+      setStatusMessage(`Restored all delisted devices. Connected to ${primary.name}.`)
+    } else {
+      setStatusMessage('Restored all delisted devices.')
+    }
+  }
 
   // Initialize devices & listeners
   useEffect(() => {
@@ -191,6 +252,11 @@ export default function App(): JSX.Element {
                 <span className="px-3 py-1 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700/50 flex items-center gap-1">
                   📁 <span className="font-mono">{selectedDevice.musicPath}</span>
                 </span>
+                {selectedDevice.size && (
+                  <span className="px-2.5 py-1 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700/50 font-mono">
+                    💾 {selectedDevice.size}
+                  </span>
+                )}
                 {selectedDevice.hasMusicFolder ? (
                   <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
                     🎵 /MUSIC active
@@ -251,22 +317,35 @@ export default function App(): JSX.Element {
                   setUseDownloadsFallback(true)
                 } else {
                   setUseDownloadsFallback(false)
-                  const matched = devices.find((d) => d.id === val)
+                  const matched = activeDevices.find((d) => d.id === val)
                   if (matched) setSelectedDevice(matched)
                 }
               }}
               disabled={isDownloading}
               className="flex-1 px-4 py-3 rounded-xl bg-slate-800/50 border border-slate-700/60 text-slate-200 focus:outline-none focus:ring-2 focus:ring-red-500/50 text-sm font-medium cursor-pointer transition-all"
             >
-              {devices.map((d) => (
+              {activeDevices.map((d) => (
                 <option key={d.id} value={d.id} className="bg-slate-900 text-white">
-                  {d.name} {d.hasMusicFolder ? '• (🎵 /MUSIC detected)' : ''}
+                  {d.name} {d.size ? `(${d.size})` : ''}{' '}
+                  {d.hasMusicFolder ? '• (🎵 /MUSIC detected)' : ''}
                 </option>
               ))}
               <option value="downloads" className="bg-slate-900 text-white">
                 💻 Local Downloads Folder ({downloadsDir || 'Downloads/MUSIC'})
               </option>
             </select>
+
+            {selectedDevice && !useDownloadsFallback && (
+              <button
+                onClick={handleDelistCurrentDevice}
+                disabled={isDownloading}
+                className="px-3 py-2 rounded-xl bg-slate-800/50 hover:bg-red-950/40 border border-slate-700/60 hover:border-red-500/40 text-slate-400 hover:text-red-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
+                title={`Delist "${selectedDevice.name}" so Sunthree ignores it`}
+              >
+                <span>🚫</span>
+                <span>Delist</span>
+              </button>
+            )}
 
             <button
               onClick={() => window.electronAPI?.getDevices().then(applyDevices)}
@@ -277,6 +356,22 @@ export default function App(): JSX.Element {
               🔄
             </button>
           </div>
+
+          {delistedIds.length > 0 && (
+            <div className="flex items-center justify-between text-xs px-1 text-slate-400">
+              <span>
+                {Math.ceil(delistedIds.length / 2)} drive
+                {Math.ceil(delistedIds.length / 2) > 1 ? 's' : ''} manually delisted
+              </span>
+              <button
+                onClick={handleRestoreDelisted}
+                disabled={isDownloading}
+                className="text-red-400 hover:text-red-300 hover:underline font-medium transition-colors"
+              >
+                Restore Delisted Drives
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Live Progress Bar */}
